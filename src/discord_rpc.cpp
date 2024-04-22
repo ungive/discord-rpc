@@ -347,6 +347,11 @@ extern "C" DISCORD_EXPORT void Discord_Initialize(const char* applicationId,
     IoThread->Start();
 }
 
+extern "C" DISCORD_EXPORT bool Discord_Connected(void)
+{
+    return Connection->state == RpcConnection::State::Connected;
+}
+
 extern "C" DISCORD_EXPORT void Discord_Shutdown(void)
 {
     if (!Connection) {
