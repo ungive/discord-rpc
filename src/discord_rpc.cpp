@@ -70,7 +70,7 @@ static User connectedUser;
 
 // We want to auto connect, and retry on failure, but not as fast as possible. This does expoential
 // backoff from 0.5 seconds to 1 minute
-static Backoff ReconnectTimeMs(500, 60 * 1000);
+static Backoff ReconnectTimeMs(500, 10000 /*60 * 1000*/);
 static auto NextConnect = std::chrono::system_clock::now();
 static int Pid{0};
 static int Nonce{1};
