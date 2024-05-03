@@ -1,4 +1,4 @@
 [submodule "thirdparty/rapidjson"]
 	path = thirdparty/rapidjson
-	url = git://github.com/Tencent/rapidjson.git
-	branch = v1.1.0
+	url = git@github.com:Tencent/rapidjson.git
+	tag = v1.1.0
