@@ -30,7 +30,17 @@ typedef struct DiscordButton {
     const char* url;
 } DiscordButton;
 
+typedef enum DiscordActivityType {
+    DiscordActivityType_Playing = 0, // the default
+    // DiscordActivityType_Streaming = 1, // not allowed
+    DiscordActivityType_Listening = 2,
+    DiscordActivityType_Watching = 3,
+    // DiscordActivityType_Custom = 4, // not allowed
+    DiscordActivityType_Competing = 5
+} DiscordActivityType;
+
 typedef struct DiscordRichPresence {
+    DiscordActivityType type;
     const char* state;   /* max 128 bytes */
     const char* details; /* max 128 bytes */
     int64_t startTimestamp;
