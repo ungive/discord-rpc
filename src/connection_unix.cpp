@@ -29,9 +29,10 @@ static int MsgFlags = 0;
 // Directories where the discord-ipc socket might live
 // https://github.com/flathub/com.discordapp.Discord/wiki/Rich-Precense-(discord-rpc)
 static const char* DiscordIpcSocketDirs[] = {
-  "",                           // Default
-  "snap.discord",               // https://snapcraft.io/discord
-  "app/com.discordapp.Discord", // https://flathub.org/apps/com.discordapp.Discord
+  "",                                        // Default
+  "snap.discord",                            // https://snapcraft.io/discord
+  ".flatpak/com.discordapp.Discord/xdg-run", // https://flathub.org/apps/com.discordapp.Discord
+  ".flatpak/dev.vencord.Vesktop/xdg-run",    // https://flathub.org/apps/dev.vencord.Vesktop
 };
 
 static const char* GetTempPath()
