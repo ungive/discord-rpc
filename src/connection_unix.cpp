@@ -87,6 +87,7 @@ public:
     explicit operator bool() const noexcept { return m_stream != nullptr; }
     bool open()
     {
+        close();
         m_stream = opendir(m_path.c_str());
         return m_stream != nullptr;
     }
