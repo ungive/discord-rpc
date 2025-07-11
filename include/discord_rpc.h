@@ -26,8 +26,8 @@ extern "C" {
 #define DISCORD_BUTTONS_SIZE 2
 
 typedef struct DiscordButton {
-    const char* label;
-    const char* url;
+    const char* label; /* FIXME limit? */
+    const char* url;   /* FIXME limit? */
 } DiscordButton;
 
 typedef enum DiscordActivityType {
@@ -39,10 +39,19 @@ typedef enum DiscordActivityType {
     DiscordActivityType_Competing = 5
 } DiscordActivityType;
 
+typedef enum DiscordStatusDisplayType {
+    DiscordStatusDisplayType_Name = 0, // the default
+    DiscordStatusDisplayType_State = 1,
+    DiscordStatusDisplayType_Details = 2
+} DiscordStatusDisplayType;
+
 typedef struct DiscordRichPresence {
     DiscordActivityType type;
-    const char* state;   /* max 128 bytes */
-    const char* details; /* max 128 bytes */
+    DiscordStatusDisplayType status_display_type;
+    const char* state;       /* max 128 bytes */
+    const char* state_url;   /* FIXME limit? */
+    const char* details;     /* max 128 bytes */
+    const char* details_url; /* FIXME limit? */
     int64_t startTimestamp;
     int64_t endTimestamp;
     const char* largeImageKey;  /* max 32 bytes */
