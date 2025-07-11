@@ -23,7 +23,7 @@
 extern "C" {
 #endif
 
-#define DISCORD_PRESENCE_MAX_KEY_LENGTH 32
+#define DISCORD_PRESENCE_MAX_KEY_LENGTH 300
 #define DISCORD_PRESENCE_MIN_TEXT_LENGTH 2
 #define DISCORD_PRESENCE_MAX_TEXT_LENGTH 128
 #define DISCORD_PRESENCE_MIN_BUTTON_LABEL_LENGTH 1
@@ -60,10 +60,10 @@ typedef struct DiscordRichPresence {
     const char* detailsUrl; // url
     int64_t startTimestamp;
     int64_t endTimestamp;
-    const char* largeImageKey;  // max 32 bytes
+    const char* largeImageKey;  // key
     const char* largeImageText; // text
     const char* largeImageUrl;  // url
-    const char* smallImageKey;  // max 32 bytes
+    const char* smallImageKey;  // key
     const char* smallImageText; // text
     const char* smallImageUrl;  // url
     const char* partyId;        // max 128 bytes
