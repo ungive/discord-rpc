@@ -162,7 +162,7 @@ size_t JsonWriteRichPresenceObj(char* dest,
 
                 if (presence->buttons && presence->buttons[0].label) {
                     WriteArray buttons(writer, "buttons");
-                    for (int i = 0; i < DISCORD_BUTTONS_SIZE; i++) {
+                    for (int i = 0; i < DISCORD_PRESENCE_MAX_BUTTON_COUNT; i++) {
                         const auto button = presence->buttons[i];
                         if (!button.label || !button.label[0]) {
                             continue;

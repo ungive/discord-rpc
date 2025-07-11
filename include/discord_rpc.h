@@ -23,7 +23,13 @@
 extern "C" {
 #endif
 
-#define DISCORD_BUTTONS_SIZE 2
+#define DISCORD_PRESENCE_MAX_KEY_LENGTH 32
+#define DISCORD_PRESENCE_MIN_TEXT_LENGTH 2
+#define DISCORD_PRESENCE_MAX_TEXT_LENGTH 128
+#define DISCORD_PRESENCE_MIN_BUTTON_LABEL_LENGTH 1
+#define DISCORD_PRESENCE_MAX_BUTTON_LABEL_LENGTH 32
+#define DISCORD_PRESENCE_MAX_BUTTON_COUNT 2
+#define DISCORD_PRESENCE_MAX_URL_LENGTH 256
 
 typedef struct DiscordButton {
     const char* label; /* FIXME limit? */
@@ -48,27 +54,27 @@ typedef enum DiscordStatusDisplayType {
 typedef struct DiscordRichPresence {
     DiscordActivityType type;
     DiscordStatusDisplayType status_display_type;
-    const char* state;      /* max 128 bytes */
-    const char* stateUrl;   /* max 256 bytes */
-    const char* details;    /* max 128 bytes */
-    const char* detailsUrl; /* max 256 bytes */
+    const char* state;      // text
+    const char* stateUrl;   // url
+    const char* details;    // text
+    const char* detailsUrl; // url
     int64_t startTimestamp;
     int64_t endTimestamp;
-    const char* largeImageKey;  /* max 32 bytes */
-    const char* largeImageText; /* max 128 bytes */
-    const char* largeImageUrl;  /* max 256 bytes */
-    const char* smallImageKey;  /* max 32 bytes */
-    const char* smallImageText; /* max 128 bytes */
-    const char* smallImageUrl;  /* max 256 bytes */
-    const char* partyId;        /* max 128 bytes */
+    const char* largeImageKey;  // max 32 bytes
+    const char* largeImageText; // text
+    const char* largeImageUrl;  // url
+    const char* smallImageKey;  // max 32 bytes
+    const char* smallImageText; // text
+    const char* smallImageUrl;  // url
+    const char* partyId;        // max 128 bytes
     int partySize;
     int partyMax;
     int partyPrivacy;
-    const char* matchSecret;    /* max 128 bytes */
-    const char* joinSecret;     /* max 128 bytes */
-    const char* spectateSecret; /* max 128 bytes */
+    const char* matchSecret;    // max 128 bytes
+    const char* joinSecret;     // max 128 bytes
+    const char* spectateSecret; // max 128 bytes
     int8_t instance;
-    DiscordButton buttons[DISCORD_BUTTONS_SIZE]; /* max 2 elements */
+    DiscordButton buttons[DISCORD_PRESENCE_MAX_BUTTON_COUNT];
 } DiscordRichPresence;
 
 typedef struct DiscordUser {
