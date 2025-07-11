@@ -27,7 +27,7 @@ extern "C" {
 
 typedef struct DiscordButton {
     const char* label; /* FIXME limit? */
-    const char* url;   /* FIXME limit? */
+    const char* url;   /* max 256 bytes */
 } DiscordButton;
 
 typedef enum DiscordActivityType {
@@ -49,17 +49,17 @@ typedef struct DiscordRichPresence {
     DiscordActivityType type;
     DiscordStatusDisplayType status_display_type;
     const char* state;      /* max 128 bytes */
-    const char* stateUrl;   /* FIXME limit? */
+    const char* stateUrl;   /* max 256 bytes */
     const char* details;    /* max 128 bytes */
-    const char* detailsUrl; /* FIXME limit? */
+    const char* detailsUrl; /* max 256 bytes */
     int64_t startTimestamp;
     int64_t endTimestamp;
     const char* largeImageKey;  /* max 32 bytes */
     const char* largeImageText; /* max 128 bytes */
-    const char* largeImageUrl;  /* FIXME limit? */
+    const char* largeImageUrl;  /* max 256 bytes */
     const char* smallImageKey;  /* max 32 bytes */
     const char* smallImageText; /* max 128 bytes */
-    const char* smallImageUrl;  /* FIXME limit? */
+    const char* smallImageUrl;  /* max 256 bytes */
     const char* partyId;        /* max 128 bytes */
     int partySize;
     int partyMax;
