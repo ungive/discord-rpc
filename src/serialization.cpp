@@ -112,10 +112,10 @@ size_t JsonWriteRichPresenceObj(char* dest,
                 writer.Int(presence->status_display_type);
 
                 WriteOptionalString(writer, "state", presence->state);
-                WriteOptionalString(writer, "state_url", presence->state_url);
+                WriteOptionalString(writer, "state_url", presence->stateUrl);
 
                 WriteOptionalString(writer, "details", presence->details);
-                WriteOptionalString(writer, "details_url", presence->details_url);
+                WriteOptionalString(writer, "details_url", presence->detailsUrl);
 
                 if (presence->startTimestamp || presence->endTimestamp) {
                     WriteObject timestamps(writer, "timestamps");
@@ -138,8 +138,10 @@ size_t JsonWriteRichPresenceObj(char* dest,
                     WriteObject assets(writer, "assets");
                     WriteOptionalString(writer, "large_image", presence->largeImageKey);
                     WriteOptionalString(writer, "large_text", presence->largeImageText);
+                    WriteOptionalString(writer, "large_url", presence->largeImageUrl);
                     WriteOptionalString(writer, "small_image", presence->smallImageKey);
                     WriteOptionalString(writer, "small_text", presence->smallImageText);
+                    WriteOptionalString(writer, "small_url", presence->smallImageUrl);
                 }
 
                 if ((presence->partyId && presence->partyId[0]) || presence->partySize ||

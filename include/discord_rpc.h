@@ -48,16 +48,18 @@ typedef enum DiscordStatusDisplayType {
 typedef struct DiscordRichPresence {
     DiscordActivityType type;
     DiscordStatusDisplayType status_display_type;
-    const char* state;       /* max 128 bytes */
-    const char* state_url;   /* FIXME limit? */
-    const char* details;     /* max 128 bytes */
-    const char* details_url; /* FIXME limit? */
+    const char* state;      /* max 128 bytes */
+    const char* stateUrl;   /* FIXME limit? */
+    const char* details;    /* max 128 bytes */
+    const char* detailsUrl; /* FIXME limit? */
     int64_t startTimestamp;
     int64_t endTimestamp;
     const char* largeImageKey;  /* max 32 bytes */
     const char* largeImageText; /* max 128 bytes */
+    const char* largeImageUrl;  /* FIXME limit? */
     const char* smallImageKey;  /* max 32 bytes */
     const char* smallImageText; /* max 128 bytes */
+    const char* smallImageUrl;  /* FIXME limit? */
     const char* partyId;        /* max 128 bytes */
     int partySize;
     int partyMax;
