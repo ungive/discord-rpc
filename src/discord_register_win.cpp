@@ -6,6 +6,7 @@
 #define NOSERVICE
 #define NOIME
 #include <windows.h>
+#include <WinSock2.h>
 #include <psapi.h>
 #include <cstdio>
 
