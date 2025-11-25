@@ -19,7 +19,7 @@ if (CLANG_FORMAT_CMD)
     add_custom_target(
         clangformat
         COMMAND ${CLANG_FORMAT_CMD}
-        -i -style=file -fallback-style=none
+        -i -style=file:${CMAKE_CURRENT_SOURCE_DIR}/.clang-format -fallback-style=none
         ${ALL_SOURCE_FILES}
         DEPENDS
         ${ALL_SOURCE_FILES}
@@ -52,5 +52,5 @@ add_library(rapidjson STATIC IMPORTED ${RAPIDJSON})
 
 add_subdirectory(src)
 if (BUILD_EXAMPLES)
-    add_subdirectory(examples/send-presence)
+    # add_subdirectory(examples/send-presence)
 endif(BUILD_EXAMPLES)
