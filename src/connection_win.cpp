@@ -16,17 +16,21 @@ struct BaseConnectionWin : public BaseConnection {
     HANDLE pipe{INVALID_HANDLE_VALUE};
 };
 
-static BaseConnectionWin Connection;
-
 /*static*/ BaseConnection* BaseConnection::Create()
 {
-    return &Connection;
+    return new BaseConnectionWin();
+}
+
+/*static*/ BaseConnection* BaseConnection::CreateNew()
+{
+    return new BaseConnectionWin();
 }
 
 /*static*/ void BaseConnection::Destroy(BaseConnection*& c)
 {
     auto self = reinterpret_cast<BaseConnectionWin*>(c);
     self->Close();
+    delete self;
     c = nullptr;
 }
 
@@ -50,6 +54,33 @@ bool BaseConnection::Open()
                 pipeName[pipeDigit]++;
                 continue;
             }
+        }
+        else if (lastError == ERROR_PIPE_BUSY) {
+            if (!WaitNamedPipeW(pipeName, 10000)) {
+                return false;
+            }
+            continue;
+        }
+        return false;
+    }
+}
+
+bool BaseConnection::OpenIndex(int index)
+{
+    wchar_t pipeName[]{L"\\\\?\\pipe\\discord-ipc-0"};
+    const size_t pipeDigit = sizeof(pipeName) / sizeof(wchar_t) - 2;
+    pipeName[pipeDigit] = (wchar_t)(L'0' + index);
+    auto self = reinterpret_cast<BaseConnectionWin*>(this);
+    for (;;) {
+        self->pipe = ::CreateFileW(
+          pipeName, GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr);
+        if (self->pipe != INVALID_HANDLE_VALUE) {
+            self->isOpen = true;
+            return true;
+        }
+        auto lastError = GetLastError();
+        if (lastError == ERROR_FILE_NOT_FOUND) {
+            return false;
         }
         else if (lastError == ERROR_PIPE_BUSY) {
             if (!WaitNamedPipeW(pipeName, 10000)) {

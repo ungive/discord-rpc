@@ -24,8 +24,6 @@ struct BaseConnectionUnix : public BaseConnection {
     int sock{-1};
 };
 
-static BaseConnectionUnix Connection;
-static sockaddr_un PipeAddr{};
 #ifdef MSG_NOSIGNAL
 static int MsgFlags = MSG_NOSIGNAL;
 #else
@@ -185,23 +183,21 @@ static std::string directory_find_next_recursive(
     return "";
 }
 
-/*static*/ BaseConnection* BaseConnection::Create()
+static bool connect_unix_socket(BaseConnectionUnix* self, const char* path)
 {
-    PipeAddr.sun_family = AF_UNIX;
-    return &Connection;
+    sockaddr_un addr{};
+    addr.sun_family = AF_UNIX;
+    snprintf(addr.sun_path, sizeof(addr.sun_path), "%s", path);
+    int err = connect(self->sock, (const sockaddr*)&addr, sizeof(addr));
+    if (err == 0) {
+        self->isOpen = true;
+        return true;
+    }
+    return false;
 }
 
-/*static*/ void BaseConnection::Destroy(BaseConnection*& c)
+static bool create_socket(BaseConnectionUnix* self)
 {
-    auto self = reinterpret_cast<BaseConnectionUnix*>(c);
-    self->Close();
-    c = nullptr;
-}
-
-bool BaseConnection::Open()
-{
-    const char* tempPath = GetTempPath();
-    auto self = reinterpret_cast<BaseConnectionUnix*>(this);
     self->sock = socket(AF_UNIX, SOCK_STREAM, 0);
     if (self->sock == -1) {
         return false;
@@ -211,6 +207,34 @@ bool BaseConnection::Open()
     int optval = 1;
     setsockopt(self->sock, SOL_SOCKET, SO_NOSIGPIPE, &optval, sizeof(optval));
 #endif
+    return true;
+}
+
+/*static*/ BaseConnection* BaseConnection::Create()
+{
+    return new BaseConnectionUnix();
+}
+
+/*static*/ BaseConnection* BaseConnection::CreateNew()
+{
+    return new BaseConnectionUnix();
+}
+
+/*static*/ void BaseConnection::Destroy(BaseConnection*& c)
+{
+    auto self = reinterpret_cast<BaseConnectionUnix*>(c);
+    self->Close();
+    delete self;
+    c = nullptr;
+}
+
+bool BaseConnection::Open()
+{
+    const char* tempPath = GetTempPath();
+    auto self = reinterpret_cast<BaseConnectionUnix*>(this);
+    if (!create_socket(self)) {
+        return false;
+    }
     directory_iterator directory(tempPath);
     directory.open();
     std::queue<std::string> queue;
@@ -222,13 +246,42 @@ bool BaseConnection::Open()
         if (path.empty()) {
             break;
         }
-        snprintf(PipeAddr.sun_path, sizeof(PipeAddr.sun_path), "%s", path.c_str());
-        int err = connect(self->sock, (const sockaddr*)&PipeAddr, sizeof(PipeAddr));
-        if (err == 0) {
-            self->isOpen = true;
+        if (connect_unix_socket(self, path.c_str())) {
             return true;
         }
     }
+    self->Close();
+    return false;
+}
+
+bool BaseConnection::OpenIndex(int index)
+{
+    const char* tempPath = GetTempPath();
+    auto self = reinterpret_cast<BaseConnectionUnix*>(this);
+    if (!create_socket(self)) {
+        return false;
+    }
+
+    char targetName[32];
+    snprintf(targetName, sizeof(targetName), "discord-ipc-%d", index);
+
+    auto filename_predicate = [&](struct dirent* entry) -> bool {
+        return entry->d_type == DT_SOCK && strcmp(entry->d_name, targetName) == 0;
+    };
+
+    directory_iterator directory(tempPath);
+    directory.open();
+    std::queue<std::string> queue;
+    auto directory_predicate = std::bind(
+      discord_ipc_directory_predicate, tempPath, std::placeholders::_1, std::placeholders::_2);
+
+    std::string path = directory_find_next_recursive(
+      directory, directory_predicate, filename_predicate, queue);
+
+    if (!path.empty() && connect_unix_socket(self, path.c_str())) {
+        return true;
+    }
+
     self->Close();
     return false;
 }

@@ -117,6 +117,10 @@ DISCORD_EXPORT void Discord_UpdateConnection(void);
 DISCORD_EXPORT void Discord_UpdatePresence(const DiscordRichPresence* presence);
 DISCORD_EXPORT void Discord_ClearPresence(void);
 
+/* Per-user variants: target a specific connected client by its userId */
+DISCORD_EXPORT void Discord_UpdatePresenceForUser(const char* userId, const DiscordRichPresence* presence);
+DISCORD_EXPORT void Discord_ClearPresenceForUser(const char* userId);
+
 DISCORD_EXPORT void Discord_Respond(const char* userid, /* DISCORD_REPLY_ */ int reply);
 
 DISCORD_EXPORT void Discord_UpdateHandlers(DiscordEventHandlers* handlers);

@@ -10,9 +10,11 @@ int GetProcessId();
 
 struct BaseConnection {
     static BaseConnection* Create();
+    static BaseConnection* CreateNew();
     static void Destroy(BaseConnection*&);
     bool isOpen{false};
     bool Open();
+    bool OpenIndex(int index);
     bool Close();
     bool Write(const void* data, size_t length);
     bool Read(void* data, size_t length);

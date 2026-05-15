@@ -4,19 +4,30 @@
 #include <atomic>
 
 static const int RpcVersion = 1;
-static RpcConnection Instance;
 
 /*static*/ RpcConnection* RpcConnection::Create(const char* applicationId)
 {
-    Instance.connection = BaseConnection::Create();
-    StringCopy(Instance.appId, applicationId);
-    return &Instance;
+    auto* c = new RpcConnection();
+    c->connection = BaseConnection::Create();
+    StringCopy(c->appId, applicationId);
+    c->pipeIndex = -1;
+    return c;
+}
+
+/*static*/ RpcConnection* RpcConnection::CreateForPipe(const char* applicationId, int pipeIndex)
+{
+    auto* c = new RpcConnection();
+    c->connection = BaseConnection::CreateNew();
+    StringCopy(c->appId, applicationId);
+    c->pipeIndex = pipeIndex;
+    return c;
 }
 
 /*static*/ void RpcConnection::Destroy(RpcConnection*& c)
 {
     c->Close();
     BaseConnection::Destroy(c->connection);
+    delete c;
     c = nullptr;
 }
 
@@ -26,8 +37,11 @@ void RpcConnection::Open()
         return;
     }
 
-    if (state == State::Disconnected && !connection->Open()) {
-        return;
+    if (state == State::Disconnected) {
+        bool opened = (pipeIndex >= 0) ? connection->OpenIndex(pipeIndex) : connection->Open();
+        if (!opened) {
+            return;
+        }
     }
 
     if (state == State::SentHandshake) {
