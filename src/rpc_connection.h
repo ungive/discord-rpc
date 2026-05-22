@@ -45,13 +45,11 @@ struct RpcConnection {
     std::function<void(JsonDocument& message)> onConnect;
     std::function<void(int errorCode, const char* message)> onDisconnect;
     char appId[64]{};
-    int pipeIndex{-1};
     int lastErrorCode{0};
     char lastErrorMessage[256]{};
     RpcConnection::MessageFrame sendFrame;
 
-    static RpcConnection* Create(const char* applicationId);
-    static RpcConnection* CreateForPipe(const char* applicationId, int pipeIndex);
+    static RpcConnection* Create(const char* applicationId, const char* path);
     static void Destroy(RpcConnection*&);
 
     inline bool IsOpen() const { return state == State::Connected; }

@@ -14,6 +14,7 @@
 #include <string>
 #include <utility>
 #include <functional>
+#include <vector>
 
 int GetProcessId()
 {
@@ -22,6 +23,7 @@ int GetProcessId()
 
 struct BaseConnectionUnix : public BaseConnection {
     int sock{-1};
+    std::string path;
 };
 
 #ifdef MSG_NOSIGNAL
@@ -210,14 +212,11 @@ static bool create_socket(BaseConnectionUnix* self)
     return true;
 }
 
-/*static*/ BaseConnection* BaseConnection::Create()
+/*static*/ BaseConnection* BaseConnection::Create(const char* path)
 {
-    return new BaseConnectionUnix();
-}
-
-/*static*/ BaseConnection* BaseConnection::CreateNew()
-{
-    return new BaseConnectionUnix();
+    auto* c = new BaseConnectionUnix();
+    c->path = path;
+    return c;
 }
 
 /*static*/ void BaseConnection::Destroy(BaseConnection*& c)
@@ -228,13 +227,10 @@ static bool create_socket(BaseConnectionUnix* self)
     c = nullptr;
 }
 
-bool BaseConnection::Open()
+/*static*/ std::vector<std::string> BaseConnection::ScanAvailablePaths()
 {
+    std::vector<std::string> paths;
     const char* tempPath = GetTempPath();
-    auto self = reinterpret_cast<BaseConnectionUnix*>(this);
-    if (!create_socket(self)) {
-        return false;
-    }
     directory_iterator directory(tempPath);
     directory.open();
     std::queue<std::string> queue;
@@ -246,42 +242,20 @@ bool BaseConnection::Open()
         if (path.empty()) {
             break;
         }
-        if (connect_unix_socket(self, path.c_str())) {
-            return true;
-        }
+        paths.push_back(std::move(path));
     }
-    self->Close();
-    return false;
+    return paths;
 }
 
-bool BaseConnection::OpenIndex(int index)
+bool BaseConnection::Open()
 {
-    const char* tempPath = GetTempPath();
     auto self = reinterpret_cast<BaseConnectionUnix*>(this);
     if (!create_socket(self)) {
         return false;
     }
-
-    char targetName[32];
-    snprintf(targetName, sizeof(targetName), "discord-ipc-%d", index);
-
-    auto filename_predicate = [&](struct dirent* entry) -> bool {
-        return entry->d_type == DT_SOCK && strcmp(entry->d_name, targetName) == 0;
-    };
-
-    directory_iterator directory(tempPath);
-    directory.open();
-    std::queue<std::string> queue;
-    auto directory_predicate = std::bind(
-      discord_ipc_directory_predicate, tempPath, std::placeholders::_1, std::placeholders::_2);
-
-    std::string path = directory_find_next_recursive(
-      directory, directory_predicate, filename_predicate, queue);
-
-    if (!path.empty() && connect_unix_socket(self, path.c_str())) {
+    if (connect_unix_socket(self, self->path.c_str())) {
         return true;
     }
-
     self->Close();
     return false;
 }

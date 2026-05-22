@@ -1,25 +1,13 @@
 #include "rpc_connection.h"
 #include "serialization.h"
 
-#include <atomic>
-
 static const int RpcVersion = 1;
 
-/*static*/ RpcConnection* RpcConnection::Create(const char* applicationId)
+/*static*/ RpcConnection* RpcConnection::Create(const char* applicationId, const char* path)
 {
     auto* c = new RpcConnection();
-    c->connection = BaseConnection::Create();
+    c->connection = BaseConnection::Create(path);
     StringCopy(c->appId, applicationId);
-    c->pipeIndex = -1;
-    return c;
-}
-
-/*static*/ RpcConnection* RpcConnection::CreateForPipe(const char* applicationId, int pipeIndex)
-{
-    auto* c = new RpcConnection();
-    c->connection = BaseConnection::CreateNew();
-    StringCopy(c->appId, applicationId);
-    c->pipeIndex = pipeIndex;
     return c;
 }
 
@@ -38,8 +26,7 @@ void RpcConnection::Open()
     }
 
     if (state == State::Disconnected) {
-        bool opened = (pipeIndex >= 0) ? connection->OpenIndex(pipeIndex) : connection->Open();
-        if (!opened) {
+        if (!connection->Open()) {
             return;
         }
     }
