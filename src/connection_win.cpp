@@ -32,6 +32,10 @@ struct BaseConnectionWin : public BaseConnection {
     c = nullptr;
 }
 
+// Returns paths as std::string. Windows IPC pipe paths are always pure ASCII
+// (\\.\pipe\discord-ipc-N where N is 0-9), so no encoding concerns. A future
+// refactor could use std::filesystem::path for stronger typing, but it would
+// require bumping the project's C++ standard from 14 to 17.
 /*static*/ std::vector<std::string> BaseConnection::ScanAvailablePaths()
 {
     std::vector<std::string> paths;

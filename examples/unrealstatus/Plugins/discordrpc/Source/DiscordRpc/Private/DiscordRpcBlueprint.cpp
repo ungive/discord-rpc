@@ -25,7 +25,7 @@ static void ReadyHandler(const DiscordUser* connectedUser)
     }
 }
 
-static void DisconnectHandler(int errorCode, const char* message)
+static void DisconnectHandler(int errorCode, const char* message, const DiscordUser* /*user*/)
 {
     auto msg = FString(message);
     UE_LOG(Discord, Log, TEXT("Discord disconnected (%d): %s"), errorCode, *msg);

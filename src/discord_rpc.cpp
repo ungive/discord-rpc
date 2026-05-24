@@ -11,8 +11,8 @@
 #include <chrono>
 #include <memory>
 #include <mutex>
-#include <set>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 #ifndef DISCORD_DISABLE_IO_THREAD
@@ -82,8 +82,18 @@ static char StoredAppId[64]{};
 static std::vector<std::shared_ptr<PerConnectionState>> Connections;
 static std::mutex ConnectionsMutex;
 
+constexpr auto PathScanInterval = std::chrono::seconds(10);
+
+static std::chrono::system_clock::time_point LastPathScan{};
+static std::vector<std::string> CachedPaths;
+static std::unordered_set<std::string> CachedPathSet;
+
 static DiscordEventHandlers QueuedHandlers{};
 static DiscordEventHandlers Handlers{};
+// TODO: these are still global — the errored/joinGame/spectateGame callbacks
+// fire once for whichever connection saw the event, with no way for the
+// consumer to know which user/connection it belongs to. Should become
+// per-connection state when those callbacks gain a user parameter.
 static std::atomic_bool WasJoinGame{false};
 static std::atomic_bool WasSpectateGame{false};
 static char JoinGameSecret[256];
@@ -244,8 +254,15 @@ static void Discord_UpdateConnection(void)
         return;
     }
 
-    auto availablePaths = BaseConnection::ScanAvailablePaths();
-    std::set<std::string> availableSet(availablePaths.begin(), availablePaths.end());
+    auto now = std::chrono::system_clock::now();
+    if (now - LastPathScan >= PathScanInterval) {
+        CachedPaths = BaseConnection::ScanAvailablePaths();
+        CachedPathSet.clear();
+        CachedPathSet.insert(CachedPaths.begin(), CachedPaths.end());
+        LastPathScan = now;
+    }
+    const auto& availablePaths = CachedPaths;
+    const auto& availableSet = CachedPathSet;
 
     // Take snapshot for processing (also add/remove under the same lock).
     std::vector<std::shared_ptr<PerConnectionState>> snapshot;
@@ -280,11 +297,8 @@ static void Discord_UpdateConnection(void)
     }
 
     // Process each connection: reconnect or read/write, without holding ConnectionsMutex.
+    // Every entry has rpc != nullptr by construction (AddConnection always assigns it).
     for (auto& cs : snapshot) {
-        if (!cs->rpc) {
-            continue;
-        }
-
         if (!cs->rpc->IsOpen()) {
             // Don't retry connections whose IPC path has disappeared.
             if (availableSet.find(cs->path) == availableSet.end()) {
@@ -388,7 +402,7 @@ static void Discord_UpdateConnection(void)
         local.Copy(*qmessage);
         SendQueue.CommitSend();
         for (auto& cs : snapshot) {
-            if (cs->rpc && cs->rpc->IsOpen()) {
+            if (cs->rpc->IsOpen()) {
                 cs->rpc->Write(local.buffer, local.length);
             }
         }
@@ -435,6 +449,11 @@ extern "C" DISCORD_EXPORT void Discord_Initialize(const char* applicationId,
 
     StringCopy(StoredAppId, applicationId);
 
+    // Force a path scan on the IO thread's first tick.
+    LastPathScan = std::chrono::system_clock::time_point{};
+    CachedPaths.clear();
+    CachedPathSet.clear();
+
     IoThread->Start();
 }
 
@@ -442,7 +461,7 @@ extern "C" DISCORD_EXPORT bool Discord_Connected(void)
 {
     std::lock_guard<std::mutex> lock(ConnectionsMutex);
     for (auto& cs : Connections) {
-        if (cs->rpc && cs->rpc->IsOpen()) {
+        if (cs->rpc->IsOpen()) {
             return true;
         }
     }
@@ -463,6 +482,9 @@ extern "C" DISCORD_EXPORT void Discord_Shutdown(void)
         Connections.clear();
     }
     StoredAppId[0] = 0;
+    LastPathScan = std::chrono::system_clock::time_point{};
+    CachedPaths.clear();
+    CachedPathSet.clear();
 }
 
 extern "C" DISCORD_EXPORT void Discord_UpdatePresence(const DiscordRichPresence* presence)
@@ -497,6 +519,7 @@ extern "C" DISCORD_EXPORT void Discord_UpdatePresenceForUser(const char* userId,
         std::lock_guard<std::mutex> lock(ConnectionsMutex);
         snapshot = Connections;
     }
+    bool anyMatched = false;
     for (auto& cs : snapshot) {
         if (strcmp(cs->connectedUser.userId, userId) == 0) {
             std::lock_guard<std::mutex> guard(cs->presenceMutex);
@@ -507,8 +530,11 @@ extern "C" DISCORD_EXPORT void Discord_UpdatePresenceForUser(const char* userId,
               Pid,
               presence);
             cs->updatePresence.store(true);
-            SignalIOActivity();
+            anyMatched = true;
         }
+    }
+    if (anyMatched) {
+        SignalIOActivity();
     }
 }
 
@@ -557,7 +583,7 @@ extern "C" DISCORD_EXPORT void Discord_RunCallbacks(void)
     std::vector<bool> isConnected(snapshot.size());
     for (size_t i = 0; i < snapshot.size(); ++i) {
         wasDisconnected[i] = snapshot[i]->wasJustDisconnected.exchange(false);
-        isConnected[i] = snapshot[i]->rpc && snapshot[i]->rpc->IsOpen();
+        isConnected[i] = snapshot[i]->rpc->IsOpen();
     }
 
     // If a connection is currently open, fire its disconnect cb first (before other signals).
@@ -565,8 +591,13 @@ extern "C" DISCORD_EXPORT void Discord_RunCallbacks(void)
         if (isConnected[i] && wasDisconnected[i]) {
             std::lock_guard<std::mutex> guard(HandlerMutex);
             if (Handlers.disconnected) {
+                DiscordUser du{snapshot[i]->connectedUser.userId,
+                               snapshot[i]->connectedUser.username,
+                               snapshot[i]->connectedUser.discriminator,
+                               snapshot[i]->connectedUser.avatar};
                 Handlers.disconnected(snapshot[i]->lastDisconnectErrorCode,
-                                      snapshot[i]->lastDisconnectErrorMessage);
+                                      snapshot[i]->lastDisconnectErrorMessage,
+                                      snapshot[i]->connectedUser.userId[0] ? &du : nullptr);
             }
         }
     }
@@ -628,8 +659,13 @@ extern "C" DISCORD_EXPORT void Discord_RunCallbacks(void)
         if (!isConnected[i] && wasDisconnected[i]) {
             std::lock_guard<std::mutex> guard(HandlerMutex);
             if (Handlers.disconnected) {
+                DiscordUser du{snapshot[i]->connectedUser.userId,
+                               snapshot[i]->connectedUser.username,
+                               snapshot[i]->connectedUser.discriminator,
+                               snapshot[i]->connectedUser.avatar};
                 Handlers.disconnected(snapshot[i]->lastDisconnectErrorCode,
-                                      snapshot[i]->lastDisconnectErrorMessage);
+                                      snapshot[i]->lastDisconnectErrorMessage,
+                                      snapshot[i]->connectedUser.userId[0] ? &du : nullptr);
             }
         }
     }

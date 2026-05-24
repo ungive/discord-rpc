@@ -86,7 +86,9 @@ typedef struct DiscordUser {
 
 typedef struct DiscordEventHandlers {
     void (*ready)(const DiscordUser* request);
-    void (*disconnected)(int errorCode, const char* message);
+    /* user identifies which connection disconnected; may be null if the
+       client disconnected before completing the handshake */
+    void (*disconnected)(int errorCode, const char* message, const DiscordUser* user);
     void (*errored)(int errorCode, const char* message);
     void (*joinGame)(const char* joinSecret);
     void (*spectateGame)(const char* spectateSecret);

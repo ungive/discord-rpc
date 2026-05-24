@@ -67,9 +67,12 @@ static void handleDiscordReady(const DiscordUser* connectedUser)
            connectedUser->userId);
 }
 
-static void handleDiscordDisconnected(int errcode, const char* message)
+static void handleDiscordDisconnected(int errcode, const char* message, const DiscordUser* user)
 {
-    printf("\nDiscord: disconnected (%d: %s)\n", errcode, message);
+    printf("\nDiscord: disconnected (%d: %s) user=%s\n",
+           errcode,
+           message,
+           (user && user->username) ? user->username : "<unknown>");
 }
 
 static void handleDiscordError(int errcode, const char* message)

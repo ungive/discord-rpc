@@ -24,6 +24,9 @@ int GetProcessId()
 struct BaseConnectionUnix : public BaseConnection {
     int sock{-1};
     std::string path;
+
+    bool CreateSocket();
+    bool ConnectUnixSocket(const char* targetPath);
 };
 
 #ifdef MSG_NOSIGNAL
@@ -185,29 +188,29 @@ static std::string directory_find_next_recursive(
     return "";
 }
 
-static bool connect_unix_socket(BaseConnectionUnix* self, const char* path)
+bool BaseConnectionUnix::ConnectUnixSocket(const char* targetPath)
 {
     sockaddr_un addr{};
     addr.sun_family = AF_UNIX;
-    snprintf(addr.sun_path, sizeof(addr.sun_path), "%s", path);
-    int err = connect(self->sock, (const sockaddr*)&addr, sizeof(addr));
+    snprintf(addr.sun_path, sizeof(addr.sun_path), "%s", targetPath);
+    int err = connect(sock, (const sockaddr*)&addr, sizeof(addr));
     if (err == 0) {
-        self->isOpen = true;
+        isOpen = true;
         return true;
     }
     return false;
 }
 
-static bool create_socket(BaseConnectionUnix* self)
+bool BaseConnectionUnix::CreateSocket()
 {
-    self->sock = socket(AF_UNIX, SOCK_STREAM, 0);
-    if (self->sock == -1) {
+    sock = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (sock == -1) {
         return false;
     }
-    fcntl(self->sock, F_SETFL, O_NONBLOCK);
+    fcntl(sock, F_SETFL, O_NONBLOCK);
 #ifdef SO_NOSIGPIPE
     int optval = 1;
-    setsockopt(self->sock, SOL_SOCKET, SO_NOSIGPIPE, &optval, sizeof(optval));
+    setsockopt(sock, SOL_SOCKET, SO_NOSIGPIPE, &optval, sizeof(optval));
 #endif
     return true;
 }
@@ -250,10 +253,10 @@ static bool create_socket(BaseConnectionUnix* self)
 bool BaseConnection::Open()
 {
     auto self = reinterpret_cast<BaseConnectionUnix*>(this);
-    if (!create_socket(self)) {
+    if (!self->CreateSocket()) {
         return false;
     }
-    if (connect_unix_socket(self, self->path.c_str())) {
+    if (self->ConnectUnixSocket(self->path.c_str())) {
         return true;
     }
     self->Close();

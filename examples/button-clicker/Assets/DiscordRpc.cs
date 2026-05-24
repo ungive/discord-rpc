@@ -11,8 +11,8 @@ public class DiscordRpc
     public delegate void OnReadyInfo(ref DiscordUser connectedUser);
 
     [MonoPInvokeCallback(typeof(OnDisconnectedInfo))]
-    public static void DisconnectedCallback(int errorCode, string message) { Callbacks.disconnectedCallback(errorCode, message); }
-    public delegate void OnDisconnectedInfo(int errorCode, string message);
+    public static void DisconnectedCallback(int errorCode, string message, ref DiscordUser disconnectedUser) { Callbacks.disconnectedCallback(errorCode, message, ref disconnectedUser); }
+    public delegate void OnDisconnectedInfo(int errorCode, string message, ref DiscordUser disconnectedUser);
 
     [MonoPInvokeCallback(typeof(OnErrorInfo))]
     public static void ErrorCallback(int errorCode, string message) { Callbacks.errorCallback(errorCode, message); }
