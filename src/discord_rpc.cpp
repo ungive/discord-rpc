@@ -598,9 +598,9 @@ extern "C" DISCORD_EXPORT void Discord_RunCallbacks(void)
                                snapshot[i]->connectedUser.username,
                                snapshot[i]->connectedUser.discriminator,
                                snapshot[i]->connectedUser.avatar};
-                Handlers.disconnected(snapshot[i]->lastDisconnectErrorCode,
-                                      snapshot[i]->lastDisconnectErrorMessage,
-                                      snapshot[i]->connectedUser.userId[0] ? &du : nullptr);
+                Handlers.disconnected(snapshot[i]->connectedUser.userId[0] ? &du : nullptr,
+                                      snapshot[i]->lastDisconnectErrorCode,
+                                      snapshot[i]->lastDisconnectErrorMessage);
             }
         }
     }
@@ -666,9 +666,9 @@ extern "C" DISCORD_EXPORT void Discord_RunCallbacks(void)
                                snapshot[i]->connectedUser.username,
                                snapshot[i]->connectedUser.discriminator,
                                snapshot[i]->connectedUser.avatar};
-                Handlers.disconnected(snapshot[i]->lastDisconnectErrorCode,
-                                      snapshot[i]->lastDisconnectErrorMessage,
-                                      snapshot[i]->connectedUser.userId[0] ? &du : nullptr);
+                Handlers.disconnected(snapshot[i]->connectedUser.userId[0] ? &du : nullptr,
+                                      snapshot[i]->lastDisconnectErrorCode,
+                                      snapshot[i]->lastDisconnectErrorMessage);
             }
         }
     }

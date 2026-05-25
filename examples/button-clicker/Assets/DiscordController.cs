@@ -60,7 +60,7 @@ public class DiscordController : MonoBehaviour
         onConnect.Invoke();
     }
 
-    public void DisconnectedCallback(int errorCode, string message, ref DiscordRpc.DiscordUser disconnectedUser)
+    public void DisconnectedCallback(ref DiscordRpc.DiscordUser disconnectedUser, int errorCode, string message)
     {
         Debug.Log(string.Format("Discord: disconnect {0}: {1} (user {2})", errorCode, message, disconnectedUser.username));
         onDisconnect.Invoke();
