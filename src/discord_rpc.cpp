@@ -86,7 +86,6 @@ static std::mutex ConnectionsMutex;
 constexpr auto PathScanInterval = std::chrono::seconds(10);
 
 static std::chrono::steady_clock::time_point LastPathScan{};
-static std::vector<std::string> CachedPaths;
 static std::unordered_set<std::string> CachedPathSet;
 
 static DiscordEventHandlers QueuedHandlers{};
@@ -257,12 +256,12 @@ static void Discord_UpdateConnection(void)
 
     auto now = std::chrono::steady_clock::now();
     if (now - LastPathScan >= PathScanInterval) {
-        CachedPaths = BaseConnection::ScanAvailablePaths();
         CachedPathSet.clear();
-        CachedPathSet.insert(CachedPaths.begin(), CachedPaths.end());
+        for (auto& p : BaseConnection::ScanAvailablePaths()) {
+            CachedPathSet.insert(std::move(p));
+        }
         LastPathScan = now;
     }
-    const auto& availablePaths = CachedPaths;
     const auto& availableSet = CachedPathSet;
 
     // Take snapshot for processing (also add/remove under the same lock).
@@ -271,7 +270,7 @@ static void Discord_UpdateConnection(void)
         std::lock_guard<std::mutex> lock(ConnectionsMutex);
 
         // Add a connection for each newly discovered path.
-        for (const auto& p : availablePaths) {
+        for (const auto& p : availableSet) {
             bool found = false;
             for (const auto& cs : Connections) {
                 if (cs->path == p) {
@@ -454,7 +453,6 @@ extern "C" DISCORD_EXPORT void Discord_Initialize(const char* applicationId,
 
     // Force a path scan on the IO thread's first tick.
     LastPathScan = std::chrono::steady_clock::time_point{};
-    CachedPaths.clear();
     CachedPathSet.clear();
 
     IoThread->Start();
@@ -486,7 +484,6 @@ extern "C" DISCORD_EXPORT void Discord_Shutdown(void)
     }
     StoredAppId[0] = 0;
     LastPathScan = std::chrono::steady_clock::time_point{};
-    CachedPaths.clear();
     CachedPathSet.clear();
 }
 
