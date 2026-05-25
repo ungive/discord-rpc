@@ -85,7 +85,7 @@ static std::mutex ConnectionsMutex;
 
 constexpr auto PathScanInterval = std::chrono::seconds(10);
 
-static std::chrono::system_clock::time_point LastPathScan{};
+static std::chrono::steady_clock::time_point LastPathScan{};
 static std::vector<std::string> CachedPaths;
 static std::unordered_set<std::string> CachedPathSet;
 
@@ -255,7 +255,7 @@ static void Discord_UpdateConnection(void)
         return;
     }
 
-    auto now = std::chrono::system_clock::now();
+    auto now = std::chrono::steady_clock::now();
     if (now - LastPathScan >= PathScanInterval) {
         CachedPaths = BaseConnection::ScanAvailablePaths();
         CachedPathSet.clear();
@@ -453,7 +453,7 @@ extern "C" DISCORD_EXPORT void Discord_Initialize(const char* applicationId,
     StringCopy(StoredAppId, applicationId);
 
     // Force a path scan on the IO thread's first tick.
-    LastPathScan = std::chrono::system_clock::time_point{};
+    LastPathScan = std::chrono::steady_clock::time_point{};
     CachedPaths.clear();
     CachedPathSet.clear();
 
@@ -485,7 +485,7 @@ extern "C" DISCORD_EXPORT void Discord_Shutdown(void)
         Connections.clear();
     }
     StoredAppId[0] = 0;
-    LastPathScan = std::chrono::system_clock::time_point{};
+    LastPathScan = std::chrono::steady_clock::time_point{};
     CachedPaths.clear();
     CachedPathSet.clear();
 }
