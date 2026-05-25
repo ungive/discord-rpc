@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cassert>
 #include <chrono>
 #include <memory>
 #include <mutex>
@@ -300,8 +301,10 @@ static void Discord_UpdateConnection(void)
     // Every entry has rpc != nullptr by construction (AddConnection always assigns it).
     for (auto& cs : snapshot) {
         if (!cs->rpc->IsOpen()) {
-            // Don't retry connections whose IPC path has disappeared.
+            // Connections matching both !IsOpen() and "path gone" are erased
+            // above, so reaching this branch indicates a broken invariant.
             if (availableSet.find(cs->path) == availableSet.end()) {
+                assert(false);
                 continue;
             }
             if (std::chrono::system_clock::now() >= cs->nextConnect) {
