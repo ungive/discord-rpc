@@ -548,6 +548,9 @@ extern "C" DISCORD_EXPORT void Discord_ClearPresenceForUser(const char* userId)
 
 extern "C" DISCORD_EXPORT void Discord_Respond(const char* userId, /* DISCORD_REPLY_ */ int reply)
 {
+    // TODO: should route to the connection that originated the join request
+    // instead of broadcasting through SendQueue to every open connection.
+    // Not needed for Music Presence's use case, left for follow-up.
     // if no connections are open, let's not batch up stale messages for later
     if (!Discord_Connected()) {
         return;
