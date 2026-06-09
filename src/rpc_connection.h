@@ -3,6 +3,8 @@
 #include "connection.h"
 #include "serialization.h"
 
+#include <functional>
+
 // I took this from the buffer size libuv uses for named pipes; I suspect ours would usually be much
 // smaller.
 constexpr size_t MaxRpcFrameSize = 64 * 1024;
@@ -40,14 +42,14 @@ struct RpcConnection {
 
     BaseConnection* connection{nullptr};
     State state{State::Disconnected};
-    void (*onConnect)(JsonDocument& message){nullptr};
-    void (*onDisconnect)(int errorCode, const char* message){nullptr};
+    std::function<void(JsonDocument& message)> onConnect;
+    std::function<void(int errorCode, const char* message)> onDisconnect;
     char appId[64]{};
     int lastErrorCode{0};
     char lastErrorMessage[256]{};
     RpcConnection::MessageFrame sendFrame;
 
-    static RpcConnection* Create(const char* applicationId);
+    static RpcConnection* Create(const char* applicationId, const char* path);
     static void Destroy(RpcConnection*&);
 
     inline bool IsOpen() const { return state == State::Connected; }

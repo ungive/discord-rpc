@@ -14,6 +14,7 @@
 #include <string>
 #include <utility>
 #include <functional>
+#include <vector>
 
 int GetProcessId()
 {
@@ -22,10 +23,12 @@ int GetProcessId()
 
 struct BaseConnectionUnix : public BaseConnection {
     int sock{-1};
+    std::string path;
+
+    bool CreateSocket();
+    bool ConnectUnixSocket(const char* targetPath);
 };
 
-static BaseConnectionUnix Connection;
-static sockaddr_un PipeAddr{};
 #ifdef MSG_NOSIGNAL
 static int MsgFlags = MSG_NOSIGNAL;
 #else
@@ -185,32 +188,52 @@ static std::string directory_find_next_recursive(
     return "";
 }
 
-/*static*/ BaseConnection* BaseConnection::Create()
+bool BaseConnectionUnix::ConnectUnixSocket(const char* targetPath)
 {
-    PipeAddr.sun_family = AF_UNIX;
-    return &Connection;
+    sockaddr_un addr{};
+    addr.sun_family = AF_UNIX;
+    snprintf(addr.sun_path, sizeof(addr.sun_path), "%s", targetPath);
+    int err = connect(sock, (const sockaddr*)&addr, sizeof(addr));
+    if (err == 0) {
+        isOpen = true;
+        return true;
+    }
+    return false;
+}
+
+bool BaseConnectionUnix::CreateSocket()
+{
+    sock = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (sock == -1) {
+        return false;
+    }
+    fcntl(sock, F_SETFL, O_NONBLOCK);
+#ifdef SO_NOSIGPIPE
+    int optval = 1;
+    setsockopt(sock, SOL_SOCKET, SO_NOSIGPIPE, &optval, sizeof(optval));
+#endif
+    return true;
+}
+
+/*static*/ BaseConnection* BaseConnection::Create(const char* path)
+{
+    auto* c = new BaseConnectionUnix();
+    c->path = path;
+    return c;
 }
 
 /*static*/ void BaseConnection::Destroy(BaseConnection*& c)
 {
     auto self = reinterpret_cast<BaseConnectionUnix*>(c);
     self->Close();
+    delete self;
     c = nullptr;
 }
 
-bool BaseConnection::Open()
+/*static*/ std::vector<std::string> BaseConnection::ScanAvailablePaths()
 {
+    std::vector<std::string> paths;
     const char* tempPath = GetTempPath();
-    auto self = reinterpret_cast<BaseConnectionUnix*>(this);
-    self->sock = socket(AF_UNIX, SOCK_STREAM, 0);
-    if (self->sock == -1) {
-        return false;
-    }
-    fcntl(self->sock, F_SETFL, O_NONBLOCK);
-#ifdef SO_NOSIGPIPE
-    int optval = 1;
-    setsockopt(self->sock, SOL_SOCKET, SO_NOSIGPIPE, &optval, sizeof(optval));
-#endif
     directory_iterator directory(tempPath);
     directory.open();
     std::queue<std::string> queue;
@@ -222,12 +245,19 @@ bool BaseConnection::Open()
         if (path.empty()) {
             break;
         }
-        snprintf(PipeAddr.sun_path, sizeof(PipeAddr.sun_path), "%s", path.c_str());
-        int err = connect(self->sock, (const sockaddr*)&PipeAddr, sizeof(PipeAddr));
-        if (err == 0) {
-            self->isOpen = true;
-            return true;
-        }
+        paths.push_back(std::move(path));
+    }
+    return paths;
+}
+
+bool BaseConnection::Open()
+{
+    auto self = reinterpret_cast<BaseConnectionUnix*>(this);
+    if (!self->CreateSocket()) {
+        return false;
+    }
+    if (self->ConnectUnixSocket(self->path.c_str())) {
+        return true;
     }
     self->Close();
     return false;

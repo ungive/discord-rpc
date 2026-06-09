@@ -1,22 +1,21 @@
 #include "rpc_connection.h"
 #include "serialization.h"
 
-#include <atomic>
-
 static const int RpcVersion = 1;
-static RpcConnection Instance;
 
-/*static*/ RpcConnection* RpcConnection::Create(const char* applicationId)
+/*static*/ RpcConnection* RpcConnection::Create(const char* applicationId, const char* path)
 {
-    Instance.connection = BaseConnection::Create();
-    StringCopy(Instance.appId, applicationId);
-    return &Instance;
+    auto* c = new RpcConnection();
+    c->connection = BaseConnection::Create(path);
+    StringCopy(c->appId, applicationId);
+    return c;
 }
 
 /*static*/ void RpcConnection::Destroy(RpcConnection*& c)
 {
     c->Close();
     BaseConnection::Destroy(c->connection);
+    delete c;
     c = nullptr;
 }
 
@@ -26,8 +25,10 @@ void RpcConnection::Open()
         return;
     }
 
-    if (state == State::Disconnected && !connection->Open()) {
-        return;
+    if (state == State::Disconnected) {
+        if (!connection->Open()) {
+            return;
+        }
     }
 
     if (state == State::SentHandshake) {

@@ -86,7 +86,9 @@ typedef struct DiscordUser {
 
 typedef struct DiscordEventHandlers {
     void (*ready)(const DiscordUser* request);
-    void (*disconnected)(int errorCode, const char* message);
+    /* user identifies which connection disconnected; may be null if the
+       client disconnected before completing the handshake */
+    void (*disconnected)(const DiscordUser* user, int errorCode, const char* message);
     void (*errored)(int errorCode, const char* message);
     void (*joinGame)(const char* joinSecret);
     void (*spectateGame)(const char* spectateSecret);
@@ -116,6 +118,10 @@ DISCORD_EXPORT void Discord_UpdateConnection(void);
 
 DISCORD_EXPORT void Discord_UpdatePresence(const DiscordRichPresence* presence);
 DISCORD_EXPORT void Discord_ClearPresence(void);
+
+/* Per-user variants: target a specific connected client by its userId */
+DISCORD_EXPORT void Discord_UpdatePresenceForUser(const char* userId, const DiscordRichPresence* presence);
+DISCORD_EXPORT void Discord_ClearPresenceForUser(const char* userId);
 
 DISCORD_EXPORT void Discord_Respond(const char* userid, /* DISCORD_REPLY_ */ int reply);
 

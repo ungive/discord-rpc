@@ -6,9 +6,15 @@
 #include "rpc_connection.h"
 #include "serialization.h"
 
+#include <algorithm>
 #include <atomic>
+#include <cassert>
 #include <chrono>
+#include <memory>
 #include <mutex>
+#include <string>
+#include <unordered_set>
+#include <vector>
 
 #ifndef DISCORD_DISABLE_IO_THREAD
 #include <condition_variable>
@@ -46,32 +52,59 @@ struct User {
     // Rounded way up because I'm paranoid about games breaking from future changes in these sizes
 };
 
-static RpcConnection* Connection{nullptr};
+struct PerConnectionState {
+    ~PerConnectionState()
+    {
+        if (rpc) {
+            rpc->onConnect = nullptr;
+            rpc->onDisconnect = nullptr;
+            RpcConnection::Destroy(rpc);
+        }
+    }
+
+    std::string path;
+    RpcConnection* rpc{nullptr};
+    User connectedUser{};
+    std::atomic_bool wasJustConnected{false};
+    std::atomic_bool wasJustDisconnected{false};
+    std::atomic_bool gotErrorMessage{false};
+    int lastErrorCode{0};
+    char lastErrorMessage[256]{};
+    int lastDisconnectErrorCode{0};
+    char lastDisconnectErrorMessage[256]{};
+    std::atomic_bool updatePresence{false};
+    QueuedMessage queuedPresence{};
+    std::mutex presenceMutex;
+    Backoff reconnectTimeMs{500, 10000};
+    std::chrono::system_clock::time_point nextConnect{};
+};
+
+static char StoredAppId[64]{};
+static std::vector<std::shared_ptr<PerConnectionState>> Connections;
+static std::mutex ConnectionsMutex;
+
+constexpr auto PathScanInterval = std::chrono::seconds(10);
+
+static std::chrono::steady_clock::time_point LastPathScan{};
+static std::unordered_set<std::string> CachedPathSet;
+
 static DiscordEventHandlers QueuedHandlers{};
 static DiscordEventHandlers Handlers{};
-static std::atomic_bool WasJustConnected{false};
-static std::atomic_bool WasJustDisconnected{false};
-static std::atomic_bool GotErrorMessage{false};
+// TODO: these are still global — the errored/joinGame/spectateGame callbacks
+// fire once for whichever connection saw the event, with no way for the
+// consumer to know which user/connection it belongs to. Should become
+// per-connection state when those callbacks gain a user parameter.
 static std::atomic_bool WasJoinGame{false};
 static std::atomic_bool WasSpectateGame{false};
-static std::atomic_bool UpdatePresence{false};
 static char JoinGameSecret[256];
 static char SpectateGameSecret[256];
+static std::atomic_bool GotAnyErrorMessage{false};
 static int LastErrorCode{0};
 static char LastErrorMessage[256];
-static int LastDisconnectErrorCode{0};
-static char LastDisconnectErrorMessage[256];
-static std::mutex PresenceMutex;
 static std::mutex HandlerMutex;
-static QueuedMessage QueuedPresence{};
 static MsgQueue<QueuedMessage, MessageQueueSize> SendQueue;
 static MsgQueue<User, JoinQueueSize> JoinAskQueue;
-static User connectedUser;
 
-// We want to auto connect, and retry on failure, but not as fast as possible. This does expoential
-// backoff from 0.5 seconds to 1 minute
-static Backoff ReconnectTimeMs(500, 10000 /*60 * 1000*/);
-static auto NextConnect = std::chrono::system_clock::now();
 static int Pid{0};
 static int Nonce{1};
 
@@ -122,121 +155,6 @@ public:
 #endif // DISCORD_DISABLE_IO_THREAD
 static IoThreadHolder* IoThread{nullptr};
 
-static void UpdateReconnectTime()
-{
-    NextConnect = std::chrono::system_clock::now() +
-      std::chrono::duration<int64_t, std::milli>{ReconnectTimeMs.nextDelay()};
-}
-
-#ifdef DISCORD_DISABLE_IO_THREAD
-extern "C" DISCORD_EXPORT void Discord_UpdateConnection(void)
-#else
-static void Discord_UpdateConnection(void)
-#endif
-{
-    if (!Connection) {
-        return;
-    }
-
-    if (!Connection->IsOpen()) {
-        if (std::chrono::system_clock::now() >= NextConnect) {
-            UpdateReconnectTime();
-            Connection->Open();
-        }
-    }
-    else {
-        // reads
-
-        for (;;) {
-            JsonDocument message;
-
-            if (!Connection->Read(message)) {
-                break;
-            }
-
-            const char* evtName = GetStrMember(&message, "evt");
-            const char* nonce = GetStrMember(&message, "nonce");
-
-            if (nonce) {
-                // in responses only -- should use to match up response when needed.
-
-                if (evtName && strcmp(evtName, "ERROR") == 0) {
-                    auto data = GetObjMember(&message, "data");
-                    LastErrorCode = GetIntMember(data, "code");
-                    StringCopy(LastErrorMessage, GetStrMember(data, "message", ""));
-                    GotErrorMessage.store(true);
-                }
-            }
-            else {
-                // should have evt == name of event, optional data
-                if (evtName == nullptr) {
-                    continue;
-                }
-
-                auto data = GetObjMember(&message, "data");
-
-                if (strcmp(evtName, "ACTIVITY_JOIN") == 0) {
-                    auto secret = GetStrMember(data, "secret");
-                    if (secret) {
-                        StringCopy(JoinGameSecret, secret);
-                        WasJoinGame.store(true);
-                    }
-                }
-                else if (strcmp(evtName, "ACTIVITY_SPECTATE") == 0) {
-                    auto secret = GetStrMember(data, "secret");
-                    if (secret) {
-                        StringCopy(SpectateGameSecret, secret);
-                        WasSpectateGame.store(true);
-                    }
-                }
-                else if (strcmp(evtName, "ACTIVITY_JOIN_REQUEST") == 0) {
-                    auto user = GetObjMember(data, "user");
-                    auto userId = GetStrMember(user, "id");
-                    auto username = GetStrMember(user, "username");
-                    auto avatar = GetStrMember(user, "avatar");
-                    auto joinReq = JoinAskQueue.GetNextAddMessage();
-                    if (userId && username && joinReq) {
-                        StringCopy(joinReq->userId, userId);
-                        StringCopy(joinReq->username, username);
-                        auto discriminator = GetStrMember(user, "discriminator");
-                        if (discriminator) {
-                            StringCopy(joinReq->discriminator, discriminator);
-                        }
-                        if (avatar) {
-                            StringCopy(joinReq->avatar, avatar);
-                        }
-                        else {
-                            joinReq->avatar[0] = 0;
-                        }
-                        JoinAskQueue.CommitAdd();
-                    }
-                }
-            }
-        }
-
-        // writes
-        if (UpdatePresence.exchange(false) && QueuedPresence.length) {
-            QueuedMessage local;
-            {
-                std::lock_guard<std::mutex> guard(PresenceMutex);
-                local.Copy(QueuedPresence);
-            }
-            if (!Connection->Write(local.buffer, local.length)) {
-                // if we fail to send, requeue
-                std::lock_guard<std::mutex> guard(PresenceMutex);
-                QueuedPresence.Copy(local);
-                UpdatePresence.exchange(true);
-            }
-        }
-
-        while (SendQueue.HavePendingSends()) {
-            auto qmessage = SendQueue.GetNextSendMessage();
-            Connection->Write(qmessage->buffer, qmessage->length);
-            SendQueue.CommitSend();
-        }
-    }
-}
-
 static void SignalIOActivity()
 {
     if (IoThread != nullptr) {
@@ -270,11 +188,238 @@ static bool DeregisterForEvent(const char* evtName)
     return false;
 }
 
+// Create a new PerConnectionState for the given path and append it to Connections.
+// Must be called with ConnectionsMutex held.
+static void AddConnection(const char* path)
+{
+    auto cs = std::make_shared<PerConnectionState>();
+    cs->path = path;
+    cs->rpc = RpcConnection::Create(StoredAppId, path);
+
+    std::weak_ptr<PerConnectionState> wcs = cs;
+
+    cs->rpc->onConnect = [wcs](JsonDocument& readyMessage) {
+        auto cs = wcs.lock();
+        if (!cs) {
+            return;
+        }
+        Discord_UpdateHandlers(&QueuedHandlers);
+        if (cs->queuedPresence.length > 0) {
+            cs->updatePresence.store(true);
+            SignalIOActivity();
+        }
+        auto data = GetObjMember(&readyMessage, "data");
+        auto user = GetObjMember(data, "user");
+        auto userId = GetStrMember(user, "id");
+        auto username = GetStrMember(user, "username");
+        auto avatar = GetStrMember(user, "avatar");
+        if (userId && username) {
+            StringCopy(cs->connectedUser.userId, userId);
+            StringCopy(cs->connectedUser.username, username);
+            auto discriminator = GetStrMember(user, "discriminator");
+            if (discriminator) {
+                StringCopy(cs->connectedUser.discriminator, discriminator);
+            }
+            if (avatar) {
+                StringCopy(cs->connectedUser.avatar, avatar);
+            }
+            else {
+                cs->connectedUser.avatar[0] = 0;
+            }
+        }
+        cs->wasJustConnected.store(true);
+        cs->reconnectTimeMs.reset();
+    };
+
+    cs->rpc->onDisconnect = [wcs](int err, const char* message) {
+        auto cs = wcs.lock();
+        if (!cs) {
+            return;
+        }
+        cs->lastDisconnectErrorCode = err;
+        StringCopy(cs->lastDisconnectErrorMessage, message);
+        cs->wasJustDisconnected.store(true);
+    };
+
+    Connections.push_back(std::move(cs));
+}
+
+#ifdef DISCORD_DISABLE_IO_THREAD
+extern "C" DISCORD_EXPORT void Discord_UpdateConnection(void)
+#else
+static void Discord_UpdateConnection(void)
+#endif
+{
+    if (StoredAppId[0] == 0) {
+        return;
+    }
+
+    auto now = std::chrono::steady_clock::now();
+    if (now - LastPathScan >= PathScanInterval) {
+        CachedPathSet.clear();
+        for (auto& p : BaseConnection::ScanAvailablePaths()) {
+            CachedPathSet.insert(std::move(p));
+        }
+        LastPathScan = now;
+    }
+    const auto& availableSet = CachedPathSet;
+
+    // Take snapshot for processing (also add/remove under the same lock).
+    std::vector<std::shared_ptr<PerConnectionState>> snapshot;
+    {
+        std::lock_guard<std::mutex> lock(ConnectionsMutex);
+
+        // Add a connection for each newly discovered path.
+        for (const auto& p : availableSet) {
+            bool found = false;
+            for (const auto& cs : Connections) {
+                if (cs->path == p) {
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) {
+                AddConnection(p.c_str());
+            }
+        }
+
+        // Remove connections that are disconnected and whose path is no longer present.
+        Connections.erase(
+          std::remove_if(Connections.begin(),
+                         Connections.end(),
+                         [&](const std::shared_ptr<PerConnectionState>& cs) {
+                             return availableSet.find(cs->path) == availableSet.end() &&
+                               !cs->rpc->IsOpen();
+                         }),
+          Connections.end());
+
+        snapshot = Connections;
+    }
+
+    // Process each connection: reconnect or read/write, without holding ConnectionsMutex.
+    // Every entry has rpc != nullptr by construction (AddConnection always assigns it).
+    for (auto& cs : snapshot) {
+        if (!cs->rpc->IsOpen()) {
+            // Connections matching both !IsOpen() and "path gone" are erased
+            // above, so reaching this branch indicates a broken invariant.
+            if (availableSet.find(cs->path) == availableSet.end()) {
+                assert(false);
+                continue;
+            }
+            if (std::chrono::system_clock::now() >= cs->nextConnect) {
+                cs->nextConnect =
+                  std::chrono::system_clock::now() +
+                  std::chrono::duration<int64_t, std::milli>{cs->reconnectTimeMs.nextDelay()};
+                cs->rpc->Open();
+            }
+        }
+        else {
+            // reads
+            for (;;) {
+                JsonDocument message;
+
+                if (!cs->rpc->Read(message)) {
+                    break;
+                }
+
+                const char* evtName = GetStrMember(&message, "evt");
+                const char* nonce = GetStrMember(&message, "nonce");
+
+                if (nonce) {
+                    // in responses only -- should use to match up response when needed.
+
+                    if (evtName && strcmp(evtName, "ERROR") == 0) {
+                        auto data = GetObjMember(&message, "data");
+                        LastErrorCode = GetIntMember(data, "code");
+                        StringCopy(LastErrorMessage, GetStrMember(data, "message", ""));
+                        GotAnyErrorMessage.store(true);
+                    }
+                }
+                else {
+                    // should have evt == name of event, optional data
+                    if (evtName == nullptr) {
+                        continue;
+                    }
+
+                    auto data = GetObjMember(&message, "data");
+
+                    if (strcmp(evtName, "ACTIVITY_JOIN") == 0) {
+                        auto secret = GetStrMember(data, "secret");
+                        if (secret) {
+                            StringCopy(JoinGameSecret, secret);
+                            WasJoinGame.store(true);
+                        }
+                    }
+                    else if (strcmp(evtName, "ACTIVITY_SPECTATE") == 0) {
+                        auto secret = GetStrMember(data, "secret");
+                        if (secret) {
+                            StringCopy(SpectateGameSecret, secret);
+                            WasSpectateGame.store(true);
+                        }
+                    }
+                    else if (strcmp(evtName, "ACTIVITY_JOIN_REQUEST") == 0) {
+                        auto user = GetObjMember(data, "user");
+                        auto userId = GetStrMember(user, "id");
+                        auto username = GetStrMember(user, "username");
+                        auto avatar = GetStrMember(user, "avatar");
+                        auto joinReq = JoinAskQueue.GetNextAddMessage();
+                        if (userId && username && joinReq) {
+                            StringCopy(joinReq->userId, userId);
+                            StringCopy(joinReq->username, username);
+                            auto discriminator = GetStrMember(user, "discriminator");
+                            if (discriminator) {
+                                StringCopy(joinReq->discriminator, discriminator);
+                            }
+                            if (avatar) {
+                                StringCopy(joinReq->avatar, avatar);
+                            }
+                            else {
+                                joinReq->avatar[0] = 0;
+                            }
+                            JoinAskQueue.CommitAdd();
+                        }
+                    }
+                }
+            }
+
+            // write presence to this connection if needed
+            if (cs->updatePresence.exchange(false) && cs->queuedPresence.length) {
+                QueuedMessage local;
+                {
+                    std::lock_guard<std::mutex> guard(cs->presenceMutex);
+                    local.Copy(cs->queuedPresence);
+                }
+                if (!cs->rpc->Write(local.buffer, local.length)) {
+                    // requeue for retry on next cycle
+                    cs->updatePresence.store(true);
+                }
+            }
+        }
+    }
+
+    // Drain the send queue and broadcast each message to all open connections.
+    while (SendQueue.HavePendingSends()) {
+        auto qmessage = SendQueue.GetNextSendMessage();
+        QueuedMessage local;
+        local.Copy(*qmessage);
+        SendQueue.CommitSend();
+        for (auto& cs : snapshot) {
+            if (cs->rpc->IsOpen()) {
+                cs->rpc->Write(local.buffer, local.length);
+            }
+        }
+    }
+}
+
 extern "C" DISCORD_EXPORT void Discord_Initialize(const char* applicationId,
                                                   DiscordEventHandlers* handlers,
                                                   int autoRegister,
                                                   const char* optionalSteamId)
 {
+    if (IoThread != nullptr) {
+        return;
+    }
+
     IoThread = new (std::nothrow) IoThreadHolder();
     if (IoThread == nullptr) {
         return;
@@ -304,80 +449,56 @@ extern "C" DISCORD_EXPORT void Discord_Initialize(const char* applicationId,
         Handlers = {};
     }
 
-    if (Connection) {
-        return;
-    }
+    StringCopy(StoredAppId, applicationId);
 
-    Connection = RpcConnection::Create(applicationId);
-    Connection->onConnect = [](JsonDocument& readyMessage) {
-        Discord_UpdateHandlers(&QueuedHandlers);
-        if (QueuedPresence.length > 0) {
-            UpdatePresence.exchange(true);
-            SignalIOActivity();
-        }
-        auto data = GetObjMember(&readyMessage, "data");
-        auto user = GetObjMember(data, "user");
-        auto userId = GetStrMember(user, "id");
-        auto username = GetStrMember(user, "username");
-        auto avatar = GetStrMember(user, "avatar");
-        if (userId && username) {
-            StringCopy(connectedUser.userId, userId);
-            StringCopy(connectedUser.username, username);
-            auto discriminator = GetStrMember(user, "discriminator");
-            if (discriminator) {
-                StringCopy(connectedUser.discriminator, discriminator);
-            }
-            if (avatar) {
-                StringCopy(connectedUser.avatar, avatar);
-            }
-            else {
-                connectedUser.avatar[0] = 0;
-            }
-        }
-        WasJustConnected.exchange(true);
-        ReconnectTimeMs.reset();
-    };
-    Connection->onDisconnect = [](int err, const char* message) {
-        LastDisconnectErrorCode = err;
-        StringCopy(LastDisconnectErrorMessage, message);
-        WasJustDisconnected.exchange(true);
-        UpdateReconnectTime();
-    };
+    // Force a path scan on the IO thread's first tick.
+    LastPathScan = std::chrono::steady_clock::time_point{};
+    CachedPathSet.clear();
 
     IoThread->Start();
 }
 
 extern "C" DISCORD_EXPORT bool Discord_Connected(void)
 {
-    return Connection->state == RpcConnection::State::Connected;
+    std::lock_guard<std::mutex> lock(ConnectionsMutex);
+    for (auto& cs : Connections) {
+        if (cs->rpc->IsOpen()) {
+            return true;
+        }
+    }
+    return false;
 }
 
 extern "C" DISCORD_EXPORT void Discord_Shutdown(void)
 {
-    if (!Connection) {
+    if (IoThread == nullptr) {
         return;
     }
-    Connection->onConnect = nullptr;
-    Connection->onDisconnect = nullptr;
     Handlers = {};
-    QueuedPresence.length = 0;
-    UpdatePresence.exchange(false);
-    if (IoThread != nullptr) {
-        IoThread->Stop();
-        delete IoThread;
-        IoThread = nullptr;
+    IoThread->Stop();
+    delete IoThread;
+    IoThread = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(ConnectionsMutex);
+        Connections.clear();
     }
-
-    RpcConnection::Destroy(Connection);
+    StoredAppId[0] = 0;
+    LastPathScan = std::chrono::steady_clock::time_point{};
+    CachedPathSet.clear();
 }
 
 extern "C" DISCORD_EXPORT void Discord_UpdatePresence(const DiscordRichPresence* presence)
 {
+    std::vector<std::shared_ptr<PerConnectionState>> snapshot;
     {
-        std::lock_guard<std::mutex> guard(PresenceMutex);
-        QueuedPresence.length = JsonWriteRichPresenceObj(
-          QueuedPresence.buffer, sizeof(QueuedPresence.buffer), Nonce++, Pid, presence);
-        UpdatePresence.exchange(true);
+        std::lock_guard<std::mutex> lock(ConnectionsMutex);
+        snapshot = Connections;
+    }
+    for (auto& cs : snapshot) {
+        std::lock_guard<std::mutex> guard(cs->presenceMutex);
+        cs->queuedPresence.length = JsonWriteRichPresenceObj(
+          cs->queuedPresence.buffer, sizeof(cs->queuedPresence.buffer), Nonce++, Pid, presence);
+        cs->updatePresence.store(true);
     }
     SignalIOActivity();
 }
@@ -387,10 +508,48 @@ extern "C" DISCORD_EXPORT void Discord_ClearPresence(void)
     Discord_UpdatePresence(nullptr);
 }
 
+extern "C" DISCORD_EXPORT void Discord_UpdatePresenceForUser(const char* userId,
+                                                             const DiscordRichPresence* presence)
+{
+    if (!userId) {
+        return;
+    }
+    std::vector<std::shared_ptr<PerConnectionState>> snapshot;
+    {
+        std::lock_guard<std::mutex> lock(ConnectionsMutex);
+        snapshot = Connections;
+    }
+    bool anyMatched = false;
+    for (auto& cs : snapshot) {
+        if (strcmp(cs->connectedUser.userId, userId) == 0) {
+            std::lock_guard<std::mutex> guard(cs->presenceMutex);
+            cs->queuedPresence.length = JsonWriteRichPresenceObj(
+              cs->queuedPresence.buffer,
+              sizeof(cs->queuedPresence.buffer),
+              Nonce++,
+              Pid,
+              presence);
+            cs->updatePresence.store(true);
+            anyMatched = true;
+        }
+    }
+    if (anyMatched) {
+        SignalIOActivity();
+    }
+}
+
+extern "C" DISCORD_EXPORT void Discord_ClearPresenceForUser(const char* userId)
+{
+    Discord_UpdatePresenceForUser(userId, nullptr);
+}
+
 extern "C" DISCORD_EXPORT void Discord_Respond(const char* userId, /* DISCORD_REPLY_ */ int reply)
 {
-    // if we are not connected, let's not batch up stale messages for later
-    if (!Connection || !Connection->IsOpen()) {
+    // TODO: should route to the connection that originated the join request
+    // instead of broadcasting through SendQueue to every open connection.
+    // Not needed for Music Presence's use case, left for follow-up.
+    // if no connections are open, let's not batch up stale messages for later
+    if (!Discord_Connected()) {
         return;
     }
     auto qmessage = SendQueue.GetNextAddMessage();
@@ -408,33 +567,59 @@ extern "C" DISCORD_EXPORT void Discord_RunCallbacks(void)
     // of times inbetween calls here. Externally, we want the sequence to seem sane, so any other
     // signals are book-ended by calls to ready and disconnect.
 
-    if (!Connection) {
+    if (StoredAppId[0] == 0) {
         return;
     }
 
-    bool wasDisconnected = WasJustDisconnected.exchange(false);
-    bool isConnected = Connection->IsOpen();
+    // Snapshot the connection list so we don't hold ConnectionsMutex while firing callbacks
+    // (which might call back into the library and deadlock).
+    std::vector<std::shared_ptr<PerConnectionState>> snapshot;
+    {
+        std::lock_guard<std::mutex> lock(ConnectionsMutex);
+        if (Connections.empty()) {
+            return;
+        }
+        snapshot = Connections;
+    }
 
-    if (isConnected) {
-        // if we are connected, disconnect cb first
-        std::lock_guard<std::mutex> guard(HandlerMutex);
-        if (wasDisconnected && Handlers.disconnected) {
-            Handlers.disconnected(LastDisconnectErrorCode, LastDisconnectErrorMessage);
+    std::vector<bool> wasDisconnected(snapshot.size());
+    std::vector<bool> isConnected(snapshot.size());
+    for (size_t i = 0; i < snapshot.size(); ++i) {
+        wasDisconnected[i] = snapshot[i]->wasJustDisconnected.exchange(false);
+        isConnected[i] = snapshot[i]->rpc->IsOpen();
+    }
+
+    // If a connection is currently open, fire its disconnect cb first (before other signals).
+    for (size_t i = 0; i < snapshot.size(); ++i) {
+        if (isConnected[i] && wasDisconnected[i]) {
+            std::lock_guard<std::mutex> guard(HandlerMutex);
+            if (Handlers.disconnected) {
+                DiscordUser du{snapshot[i]->connectedUser.userId,
+                               snapshot[i]->connectedUser.username,
+                               snapshot[i]->connectedUser.discriminator,
+                               snapshot[i]->connectedUser.avatar};
+                Handlers.disconnected(snapshot[i]->connectedUser.userId[0] ? &du : nullptr,
+                                      snapshot[i]->lastDisconnectErrorCode,
+                                      snapshot[i]->lastDisconnectErrorMessage);
+            }
         }
     }
 
-    if (WasJustConnected.exchange(false)) {
-        std::lock_guard<std::mutex> guard(HandlerMutex);
-        if (Handlers.ready) {
-            DiscordUser du{connectedUser.userId,
-                           connectedUser.username,
-                           connectedUser.discriminator,
-                           connectedUser.avatar};
-            Handlers.ready(&du);
+    // Fire ready for each newly connected user.
+    for (size_t i = 0; i < snapshot.size(); ++i) {
+        if (snapshot[i]->wasJustConnected.exchange(false)) {
+            std::lock_guard<std::mutex> guard(HandlerMutex);
+            if (Handlers.ready) {
+                DiscordUser du{snapshot[i]->connectedUser.userId,
+                               snapshot[i]->connectedUser.username,
+                               snapshot[i]->connectedUser.discriminator,
+                               snapshot[i]->connectedUser.avatar};
+                Handlers.ready(&du);
+            }
         }
     }
 
-    if (GotErrorMessage.exchange(false)) {
+    if (GotAnyErrorMessage.exchange(false)) {
         std::lock_guard<std::mutex> guard(HandlerMutex);
         if (Handlers.errored) {
             Handlers.errored(LastErrorCode, LastErrorMessage);
@@ -472,11 +657,19 @@ extern "C" DISCORD_EXPORT void Discord_RunCallbacks(void)
         JoinAskQueue.CommitSend();
     }
 
-    if (!isConnected) {
-        // if we are not connected, disconnect message last
-        std::lock_guard<std::mutex> guard(HandlerMutex);
-        if (wasDisconnected && Handlers.disconnected) {
-            Handlers.disconnected(LastDisconnectErrorCode, LastDisconnectErrorMessage);
+    // If a connection is not open, fire its disconnect cb last.
+    for (size_t i = 0; i < snapshot.size(); ++i) {
+        if (!isConnected[i] && wasDisconnected[i]) {
+            std::lock_guard<std::mutex> guard(HandlerMutex);
+            if (Handlers.disconnected) {
+                DiscordUser du{snapshot[i]->connectedUser.userId,
+                               snapshot[i]->connectedUser.username,
+                               snapshot[i]->connectedUser.discriminator,
+                               snapshot[i]->connectedUser.avatar};
+                Handlers.disconnected(snapshot[i]->connectedUser.userId[0] ? &du : nullptr,
+                                      snapshot[i]->lastDisconnectErrorCode,
+                                      snapshot[i]->lastDisconnectErrorMessage);
+            }
         }
     }
 }

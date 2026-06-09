@@ -14,45 +14,67 @@ int GetProcessId()
 
 struct BaseConnectionWin : public BaseConnection {
     HANDLE pipe{INVALID_HANDLE_VALUE};
+    std::string path;
 };
 
-static BaseConnectionWin Connection;
-
-/*static*/ BaseConnection* BaseConnection::Create()
+/*static*/ BaseConnection* BaseConnection::Create(const char* path)
 {
-    return &Connection;
+    auto* c = new BaseConnectionWin();
+    c->path = path;
+    return c;
 }
 
 /*static*/ void BaseConnection::Destroy(BaseConnection*& c)
 {
     auto self = reinterpret_cast<BaseConnectionWin*>(c);
     self->Close();
+    delete self;
     c = nullptr;
+}
+
+// Returns paths as std::string. Windows IPC pipe paths are always pure ASCII
+// (\\.\pipe\discord-ipc-N where N is 0-9), so no encoding concerns. A future
+// refactor could use std::filesystem::path for stronger typing, but it would
+// require bumping the project's C++ standard from 14 to 17.
+/*static*/ std::vector<std::string> BaseConnection::ScanAvailablePaths()
+{
+    std::vector<std::string> paths;
+    WIN32_FIND_DATAW findData;
+    HANDLE hFind = ::FindFirstFileW(L"\\\\.\\pipe\\discord-ipc-*", &findData);
+    if (hFind == INVALID_HANDLE_VALUE) {
+        return paths;
+    }
+    do {
+        // Accept only "discord-ipc-" + single digit (0-9)
+        const wchar_t* prefix = L"discord-ipc-";
+        const size_t prefixLen = 12;
+        const wchar_t* name = findData.cFileName;
+        if (wcsncmp(name, prefix, prefixLen) == 0 && name[prefixLen] >= L'0' &&
+            name[prefixLen] <= L'9' && name[prefixLen + 1] == L'\0') {
+            char narrowPath[64];
+            snprintf(narrowPath, sizeof(narrowPath), "\\\\.\\pipe\\discord-ipc-%c", (char)name[prefixLen]);
+            paths.emplace_back(narrowPath);
+        }
+    } while (::FindNextFileW(hFind, &findData));
+    ::FindClose(hFind);
+    return paths;
 }
 
 bool BaseConnection::Open()
 {
-    wchar_t pipeName[]{L"\\\\?\\pipe\\discord-ipc-0"};
-    const size_t pipeDigit = sizeof(pipeName) / sizeof(wchar_t) - 2;
-    pipeName[pipeDigit] = L'0';
     auto self = reinterpret_cast<BaseConnectionWin*>(this);
+    wchar_t wPath[256];
+    ::MultiByteToWideChar(CP_ACP, 0, self->path.c_str(), -1, wPath, 256);
     for (;;) {
         self->pipe = ::CreateFileW(
-          pipeName, GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr);
+          wPath, GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr);
         if (self->pipe != INVALID_HANDLE_VALUE) {
             self->isOpen = true;
             return true;
         }
-
         auto lastError = GetLastError();
-        if (lastError == ERROR_FILE_NOT_FOUND) {
-            if (pipeName[pipeDigit] < L'9') {
-                pipeName[pipeDigit]++;
-                continue;
-            }
-        }
-        else if (lastError == ERROR_PIPE_BUSY) {
-            if (!WaitNamedPipeW(pipeName, 10000)) {
+        if (lastError == ERROR_PIPE_BUSY) {
+            if (!WaitNamedPipeW(wPath, 10000)) {
                 return false;
             }
             continue;
