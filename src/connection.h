@@ -20,4 +20,5 @@ struct BaseConnection {
     bool Close();
     bool Write(const void* data, size_t length);
     bool Read(void* data, size_t length);
+    const char* Path() const;
 };

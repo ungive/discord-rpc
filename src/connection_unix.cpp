@@ -310,3 +310,9 @@ bool BaseConnection::Read(void* data, size_t length)
     }
     return res == (int)length;
 }
+
+const char* BaseConnection::Path() const
+{
+    auto self = reinterpret_cast<const BaseConnectionUnix*>(this);
+    return self->path.c_str();
+}

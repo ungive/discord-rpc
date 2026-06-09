@@ -136,3 +136,8 @@ bool RpcConnection::Read(JsonDocument& message)
         }
     }
 }
+
+const char* RpcConnection::Path() const
+{
+    return connection->Path();
+}

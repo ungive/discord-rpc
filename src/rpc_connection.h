@@ -58,4 +58,5 @@ struct RpcConnection {
     void Close();
     bool Write(const void* data, size_t length);
     bool Read(JsonDocument& message);
+    const char* Path() const;
 };

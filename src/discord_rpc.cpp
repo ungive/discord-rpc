@@ -100,6 +100,7 @@ static char JoinGameSecret[256];
 static char SpectateGameSecret[256];
 static std::atomic_bool GotAnyErrorMessage{false};
 static int LastErrorCode{0};
+static char LastErrorIpcPath[256];
 static char LastErrorMessage[256];
 static std::mutex HandlerMutex;
 static MsgQueue<QueuedMessage, MessageQueueSize> SendQueue;
@@ -284,14 +285,14 @@ static void Discord_UpdateConnection(void)
         }
 
         // Remove connections that are disconnected and whose path is no longer present.
-        Connections.erase(
-          std::remove_if(Connections.begin(),
-                         Connections.end(),
-                         [&](const std::shared_ptr<PerConnectionState>& cs) {
-                             return availableSet.find(cs->path) == availableSet.end() &&
-                               !cs->rpc->IsOpen();
-                         }),
-          Connections.end());
+        Connections.erase(std::remove_if(Connections.begin(),
+                                         Connections.end(),
+                                         [&](const std::shared_ptr<PerConnectionState>& cs) {
+                                             return availableSet.find(cs->path) ==
+                                               availableSet.end() &&
+                                               !cs->rpc->IsOpen();
+                                         }),
+                          Connections.end());
 
         snapshot = Connections;
     }
@@ -307,8 +308,7 @@ static void Discord_UpdateConnection(void)
                 continue;
             }
             if (std::chrono::system_clock::now() >= cs->nextConnect) {
-                cs->nextConnect =
-                  std::chrono::system_clock::now() +
+                cs->nextConnect = std::chrono::system_clock::now() +
                   std::chrono::duration<int64_t, std::milli>{cs->reconnectTimeMs.nextDelay()};
                 cs->rpc->Open();
             }
@@ -331,6 +331,7 @@ static void Discord_UpdateConnection(void)
                     if (evtName && strcmp(evtName, "ERROR") == 0) {
                         auto data = GetObjMember(&message, "data");
                         LastErrorCode = GetIntMember(data, "code");
+                        StringCopy(LastErrorIpcPath, cs->rpc->Path());
                         StringCopy(LastErrorMessage, GetStrMember(data, "message", ""));
                         GotAnyErrorMessage.store(true);
                     }
@@ -524,11 +525,7 @@ extern "C" DISCORD_EXPORT void Discord_UpdatePresenceForUser(const char* userId,
         if (strcmp(cs->connectedUser.userId, userId) == 0) {
             std::lock_guard<std::mutex> guard(cs->presenceMutex);
             cs->queuedPresence.length = JsonWriteRichPresenceObj(
-              cs->queuedPresence.buffer,
-              sizeof(cs->queuedPresence.buffer),
-              Nonce++,
-              Pid,
-              presence);
+              cs->queuedPresence.buffer, sizeof(cs->queuedPresence.buffer), Nonce++, Pid, presence);
             cs->updatePresence.store(true);
             anyMatched = true;
         }
@@ -598,7 +595,8 @@ extern "C" DISCORD_EXPORT void Discord_RunCallbacks(void)
                                snapshot[i]->connectedUser.username,
                                snapshot[i]->connectedUser.discriminator,
                                snapshot[i]->connectedUser.avatar};
-                Handlers.disconnected(snapshot[i]->connectedUser.userId[0] ? &du : nullptr,
+                Handlers.disconnected(snapshot[i]->rpc->Path(),
+                                      snapshot[i]->connectedUser.userId[0] ? &du : nullptr,
                                       snapshot[i]->lastDisconnectErrorCode,
                                       snapshot[i]->lastDisconnectErrorMessage);
             }
@@ -614,7 +612,7 @@ extern "C" DISCORD_EXPORT void Discord_RunCallbacks(void)
                                snapshot[i]->connectedUser.username,
                                snapshot[i]->connectedUser.discriminator,
                                snapshot[i]->connectedUser.avatar};
-                Handlers.ready(&du);
+                Handlers.ready(snapshot[i]->rpc->Path(), &du);
             }
         }
     }
@@ -622,7 +620,7 @@ extern "C" DISCORD_EXPORT void Discord_RunCallbacks(void)
     if (GotAnyErrorMessage.exchange(false)) {
         std::lock_guard<std::mutex> guard(HandlerMutex);
         if (Handlers.errored) {
-            Handlers.errored(LastErrorCode, LastErrorMessage);
+            Handlers.errored(LastErrorIpcPath, LastErrorCode, LastErrorMessage);
         }
     }
 
@@ -666,7 +664,8 @@ extern "C" DISCORD_EXPORT void Discord_RunCallbacks(void)
                                snapshot[i]->connectedUser.username,
                                snapshot[i]->connectedUser.discriminator,
                                snapshot[i]->connectedUser.avatar};
-                Handlers.disconnected(snapshot[i]->connectedUser.userId[0] ? &du : nullptr,
+                Handlers.disconnected(snapshot[i]->rpc->Path(),
+                                      snapshot[i]->connectedUser.userId[0] ? &du : nullptr,
                                       snapshot[i]->lastDisconnectErrorCode,
                                       snapshot[i]->lastDisconnectErrorMessage);
             }
